@@ -1,0 +1,13 @@
+version: '2'
+services:
+  web:
+    build: .
+    depends_on:
+      - redis
+    ports:
+      - '80:8000'
+    env_file: .env
+    environment:
+      - REDIS_HOST=redis
+  redis:
+    image: redis
