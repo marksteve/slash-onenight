@@ -1,3 +1,4 @@
+import logging
 import os
 
 import tornado.escape
@@ -7,6 +8,7 @@ from tornado.options import define, options, parse_command_line
 
 import redis
 import requests
+from game import Game
 
 
 define("port", default=8000, help="run on the given port", type=int)
@@ -14,15 +16,18 @@ define("debug", default=False, help="run in debug mode")
 
 client_id = os.environ['SLACK_CLIENT_ID']
 client_secret = os.environ['SLACK_CLIENT_SECRET']
+
 db = redis.StrictRedis(host=os.environ.get('REDIS_HOST', 'localhost'))
 
 
 class MainHandler(tornado.web.RequestHandler):
+
     def get(self):
         self.render('index.html', client_id=client_id, has_access=False)
 
 
 class OAuthHandler(tornado.web.RequestHandler):
+
     def get(self):
         code = self.get_query_argument('code')
         resp = requests.post('https://slack.com/api/oauth.access', data={
@@ -35,7 +40,16 @@ class OAuthHandler(tornado.web.RequestHandler):
 
 
 class CommandHandler(tornado.web.RequestHandler):
-    pass
+
+    def post(self):
+        command = self.get_body_argument('command')
+        if command != '/onenight':
+            return
+        team_id = self.get_body_argument('team_id')
+        bot = db.hgetall('onenight:{}:bot'.format(team_id))
+        channel_id = self.get_body_argument('channel_id')
+        token = bot[b'bot_access_token']
+        Game(db, channel_id, token).start()
 
 
 class MessagesHandler(tornado.web.RequestHandler):
@@ -56,7 +70,8 @@ def main():
         debug=options.debug,
     )
     app.listen(options.port)
-    tornado.ioloop.IOLoop.current().start()
+    ioloop = tornado.ioloop.IOLoop.current()
+    ioloop.start()
 
 
 if __name__ == '__main__':
