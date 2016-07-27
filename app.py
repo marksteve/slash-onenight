@@ -70,7 +70,7 @@ class ButtonHandler(tornado.web.RequestHandler):
         data = json.loads(payload)
         callback_id = data['callback_id']
         _, evt, game_id = callback_id.split(':')
-        redis.publish(callback_id, payload)
+        redis.publish(game_id, payload)
 
 
 def main():
