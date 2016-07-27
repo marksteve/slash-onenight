@@ -1,7 +1,9 @@
 import json
 import logging
+import random
 
 import tornado.ioloop
+from enum import Enum
 from tornado.websocket import websocket_connect
 
 import requests
@@ -9,7 +11,15 @@ import requests
 
 class Game(object):
 
-    GAME_STARTING = 'Starting a game...'
+    roles = Enum('Role', [
+        'werewolf',
+        'seer',
+        'robber',
+        'troublemaker',
+        'villager',
+    ])
+
+    GAME_STARTING = 'Starting game...'
     CHECKING_PLAYERS = 'Checking players...'
     INVALID_PLAYERS_LENGTH = 'You can only have 3-10 players in this channel ' \
                              'to start a game!'
@@ -57,17 +67,26 @@ class Game(object):
         channel_info = resp[channel_type]
         players = list(filter(
             lambda m: m != self.bot_user_id, channel_info['members']))
-        if not (3 <= len(players) <= 10):
-            self.send(self.INVALID_PLAYERS_LENGTH)
-            return
         return players
+
+    def get_roles(self, players):
+        roles = [self.roles.werewolf] * 2 \
+            + [self.roles.seer, self.roles.robber, self.roles.troublemaker] \
+            + [self.roles.villager] * (len(players) - 2)
+        random.shuffle(roles)
+        return roles
 
     def on_connect(self, conn_future):
         self.conn = conn_future.result()
         self.send(self.GAME_STARTING)
-        self.players = self.get_players()
-        if self.players:
-            self.send(self.GAME_STARTED)
+        players = self.get_players()
+        if not (3 <= len(players) <= 5):
+            self.send(self.INVALID_PLAYERS_LENGTH)
+            return
+        roles = self.get_roles(players)
+        center = list(range(3))
+        self.player_roles = list(zip(players + center, roles))
+        self.send(self.GAME_STARTED)
 
     def on_message(self, msg):
         evt = json.loads(msg)
