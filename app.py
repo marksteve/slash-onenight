@@ -1,22 +1,24 @@
+import json
 import os
 
 import tornado.ioloop
 import tornado.web
-from tornado.escape import to_basestring
 from tornado.options import define, options, parse_command_line
 
-import redis
 import requests
+import toredis
 from game import Game
+from utils import pairs_to_dict
 
 
-define("port", default=8000, help="run on the given port", type=int)
-define("debug", default=False, help="run in debug mode")
+define('port', default=8000, help='run on the given port', type=int)
+define('debug', default=False, help='run in debug mode')
+define('redis_host', default='localhost', help='redis host')
 
 client_id = os.environ['SLACK_CLIENT_ID']
 client_secret = os.environ['SLACK_CLIENT_SECRET']
 
-db = redis.StrictRedis(host=os.environ.get('REDIS_HOST', 'localhost'))
+redis = toredis.Client()
 
 
 class MainHandler(tornado.web.RequestHandler):
@@ -34,7 +36,7 @@ class OAuthHandler(tornado.web.RequestHandler):
             'client_secret': client_secret,
             'code': code,
         }).json()
-        db.hmset('onenight:{}:bot'.format(resp['team_id']), resp['bot'])
+        redis.hmset('onenight:bot:{}'.format(resp['team_id']), resp['bot'])
         self.render('index.html', has_access=True)
 
 
@@ -46,27 +48,40 @@ class CommandHandler(tornado.web.RequestHandler):
             return
 
         team_id = self.get_body_argument('team_id')
-        bot = db.hgetall('onenight:{}:bot'.format(team_id))
-        bot_user_id = to_basestring(bot[b'bot_user_id'])
-        bot_access_token = to_basestring(bot[b'bot_access_token'])
-        channel_id = self.get_body_argument('channel_id')
-        Game(db, bot_user_id, bot_access_token, channel_id).start()
+        redis.hgetall(
+            'onenight:bot:{}'.format(team_id), callback=self.start_game)
 
         self.write('Summoning a GM...')
 
+    def start_game(self, bot):
+        bot = pairs_to_dict(bot)
+        bot_user_id = bot['bot_user_id']
+        bot_access_token = bot['bot_access_token']
+        channel_id = self.get_body_argument('channel_id')
+        Game(
+            bot_user_id,
+            bot_access_token, channel_id, options).start()
 
-class MessagesHandler(tornado.web.RequestHandler):
-    pass
+
+class ButtonHandler(tornado.web.RequestHandler):
+
+    def post(self):
+        payload = self.get_body_argument('payload')
+        data = json.loads(payload)
+        callback_id = data['callback_id']
+        _, evt, game_id = callback_id.split(':')
+        redis.publish(callback_id, payload)
 
 
 def main():
     parse_command_line()
+    redis.connect(host=options.redis_host)
     app = tornado.web.Application(
         [
             (r'/', MainHandler),
             (r'/oauth', OAuthHandler),
             (r'/command', CommandHandler),
-            (r'/messages', MessagesHandler),
+            (r'/button', ButtonHandler),
         ],
         template_path=os.path.join(os.path.dirname(__file__), 'templates'),
         static_path=os.path.join(os.path.dirname(__file__), 'static'),

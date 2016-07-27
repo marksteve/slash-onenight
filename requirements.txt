@@ -1,3 +1,4 @@
-redis
+enum34
 requests
+toredis
 tornado

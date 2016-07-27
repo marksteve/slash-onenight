@@ -1,12 +1,14 @@
 import json
 import logging
 import random
+from uuid import uuid4
 
 import tornado.ioloop
 from enum import Enum
 from tornado.websocket import websocket_connect
 
 import requests
+import toredis
 
 
 class Game(object):
@@ -23,13 +25,21 @@ class Game(object):
     CHECKING_PLAYERS = 'Checking players...'
     INVALID_PLAYERS_LENGTH = 'You can only have 3-10 players in this channel ' \
                              'to start a game!'
-    GAME_STARTED = 'Players! Pretend to close your eyes...'
+    GAME_STARTED = 'Everyone, pretend to close your eyes.'
 
-    def __init__(self, db, bot_user_id, bot_access_token, channel_id):
-        self.db = db
+    WEREWOLF_TEXT = ':wolf: Werewolves, wake up and look for other werewolves.'
+    WEREWOLF_ATTACHMENT_TEXT = 'If you are one...'
+    WEREWOLF_ACTION_TEXT = 'Open your eyes'
+    WEREWOLF_LIST = 'The werewolves are: {}'
+    WEREWOLF_FALSE = 'You are not a werewolf!'
+
+    def __init__(self, bot_user_id, bot_access_token, channel_id, options):
+        self.id = str(uuid4())
         self.bot_user_id = bot_user_id
         self.bot_access_token = bot_access_token
         self.channel_id = channel_id
+        self.redis = toredis.Client()
+        self.redis.connect(host=options.redis_host)
 
     def api(self, path, **kwargs):
         data = kwargs.get('data', {})
@@ -76,6 +86,50 @@ class Game(object):
         random.shuffle(roles)
         return roles
 
+    def werewolves_wake_up(self):
+        callback_id = 'onenight:werewolves_wake_up:{}'.format(self.id)
+        self.api('chat.postMessage', data={
+            'channel': self.channel_id,
+            'text': self.WEREWOLF_TEXT,
+            'attachments': json.dumps([
+                {
+                    'text': self.WEREWOLF_ATTACHMENT_TEXT,
+                    'callback_id': callback_id,
+                    'actions': [
+                        {
+                            'name': 'werewolves_wake_up',
+                            'text': self.WEREWOLF_ACTION_TEXT,
+                            'type': 'button',
+                        },
+                    ],
+                },
+
+            ]),
+            'parse': 'full',
+        })
+        self.redis.subscribe(
+            callback_id, callback=self.werewolves_wake_up_respond)
+
+    def werewolves_wake_up_respond(self, resp):
+        _, _, payload = resp
+        data = json.loads(payload)
+        user = data['user']
+        response_url = data['response_url']
+        werewolves = map(lambda p: p[0], filter(
+            lambda p: p[1] == self.roles.werewolf, self.player_roles))
+        if user['id'] in werewolves:
+            tags = map(
+                lambda w: '<@{}>'.format(w),
+                filter(lambda w: w != user['id'], werewolves))
+            text = self.WEREWOLF_LIST.format(', '.join(tags))
+        else:
+            text = self.WEREWOLF_FALSE
+        requests.post(response_url, json={
+            'text': text,
+            'replace_original': False,
+            'response_type': 'ephemeral',
+        })
+
     def on_connect(self, conn_future):
         self.conn = conn_future.result()
         self.send(self.GAME_STARTING)
@@ -87,6 +141,7 @@ class Game(object):
         center = list(range(3))
         self.player_roles = list(zip(players + center, roles))
         self.send(self.GAME_STARTED)
+        self.werewolves_wake_up()
 
     def on_message(self, msg):
         evt = json.loads(msg)
