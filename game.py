@@ -9,25 +9,65 @@ import requests
 
 class Game(object):
 
-    def __init__(self, db, channel_id, token):
+    GAME_STARTING = 'Starting a game...'
+    CHECKING_PLAYERS = 'Checking players...'
+    INVALID_PLAYERS_LENGTH = 'You can only have 3-10 players in this channel ' \
+                             'to start a game!'
+    GAME_STARTED = 'Players! Pretend to close your eyes...'
+
+    def __init__(self, db, bot_user_id, bot_access_token, channel_id):
         self.db = db
+        self.bot_user_id = bot_user_id
+        self.bot_access_token = bot_access_token
         self.channel_id = channel_id
-        self.token = token
+
+    def api(self, path, **kwargs):
+        data = kwargs.get('data', {})
+        data.setdefault('token', self.bot_access_token)
+        kwargs.update(data=data)
+        resp = requests.post(
+            'https://slack.com/api/{}'.format(path),
+            **kwargs).json()
+        if not resp['ok']:
+            raise RuntimeError(repr(resp['error']))
+        return resp
 
     def start(self):
-        resp = requests.post(
-            'https://slack.com/api/rtm.start',
-            data={'token': self.token}).json()
-        if not resp['ok']:
-            raise RuntimeError('Failed to start RTM')
-        ioloop = tornado.ioloop.IOLoop.current()
+        resp = self.api('rtm.start')
         conn_future = websocket_connect(
             resp['url'], on_message_callback=self.on_message)
+        ioloop = tornado.ioloop.IOLoop.current()
         ioloop.add_future(conn_future, self.on_connect)
+
+    def send(self, msg):
+        evt = {
+            'type': 'message',
+            'channel': self.channel_id,
+            'text': msg,
+        }
+        logging.info('Send: {}'.format(evt))
+        self.conn.write_message(json.dumps(evt))
+
+    def get_players(self):
+        self.send(self.CHECKING_PLAYERS)
+        channel_type = 'channel' if self.channel_id.startswith('C') \
+            else 'group'
+        resp = self.api(
+            '{}s.info'.format(channel_type), data={'channel': self.channel_id})
+        channel_info = resp[channel_type]
+        players = list(filter(
+            lambda m: m != self.bot_user_id, channel_info['members']))
+        if not (3 <= len(players) <= 10):
+            self.send(self.INVALID_PLAYERS_LENGTH)
+            return
+        return players
 
     def on_connect(self, conn_future):
         self.conn = conn_future.result()
-        self.send('Game started!')
+        self.send(self.GAME_STARTING)
+        self.players = self.get_players()
+        if self.players:
+            self.send(self.GAME_STARTED)
 
     def on_message(self, msg):
         evt = json.loads(msg)
@@ -41,13 +81,4 @@ class Game(object):
             handler(evt)
         else:
             logging.warning('Unhandled event: {}'.format(evt))
-
-    def send(self, msg):
-        evt = {
-            'type': 'message',
-            'channel': self.channel_id,
-            'text': msg,
-        }
-        logging.info('Send: {}'.format(evt))
-        self.conn.write_message(json.dumps(evt))
 

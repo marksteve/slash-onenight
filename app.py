@@ -1,9 +1,8 @@
-import logging
 import os
 
-import tornado.escape
 import tornado.ioloop
 import tornado.web
+from tornado.escape import to_basestring
 from tornado.options import define, options, parse_command_line
 
 import redis
@@ -45,11 +44,15 @@ class CommandHandler(tornado.web.RequestHandler):
         command = self.get_body_argument('command')
         if command != '/onenight':
             return
+
         team_id = self.get_body_argument('team_id')
         bot = db.hgetall('onenight:{}:bot'.format(team_id))
+        bot_user_id = to_basestring(bot[b'bot_user_id'])
+        bot_access_token = to_basestring(bot[b'bot_access_token'])
         channel_id = self.get_body_argument('channel_id')
-        token = bot[b'bot_access_token']
-        Game(db, channel_id, token).start()
+        Game(db, bot_user_id, bot_access_token, channel_id).start()
+
+        self.write('Summoning a GM...')
 
 
 class MessagesHandler(tornado.web.RequestHandler):
