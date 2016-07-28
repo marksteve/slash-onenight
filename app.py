@@ -8,7 +8,7 @@ from tornado.options import define, options, parse_command_line
 import requests
 import toredis
 from game import Game
-from utils import pairs_to_dict
+from utils import key, pairs_to_dict
 
 
 define('port', default=8000, help='run on the given port', type=int)
@@ -36,7 +36,7 @@ class OAuthHandler(tornado.web.RequestHandler):
             'client_secret': client_secret,
             'code': code,
         }).json()
-        redis.hmset('onenight:bot:{}'.format(resp['team_id']), resp['bot'])
+        redis.hmset(key('bot', resp['team_id']), resp['bot'])
         self.render('index.html', has_access=True)
 
 
@@ -48,8 +48,7 @@ class CommandHandler(tornado.web.RequestHandler):
             return
 
         team_id = self.get_body_argument('team_id')
-        redis.hgetall(
-            'onenight:bot:{}'.format(team_id), callback=self.start_game)
+        redis.hgetall(key('bot', team_id), callback=self.start_game)
 
         self.write('Summoning a GM...')
 
